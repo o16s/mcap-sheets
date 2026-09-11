@@ -22,7 +22,7 @@
     "build": "vite build && tsc -p tsconfig.build.json",
     "lint": "oxlint",
     "preview": "vite preview",
-    "storybook": "storybook dev -p 6006",
+    "storybook": "storybook dev -p 6006 --host 0.0.0.0",
     "build-storybook": "storybook build",
     "test:unit": "vitest run --config vitest.unit.config.ts"
   },
