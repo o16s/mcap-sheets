@@ -13,11 +13,13 @@
     "src/index.ts",
     "src/components/**/*.ts",
     "src/components/**/*.tsx",
-    "src/lib/**/*.ts"
+    "src/lib/**/*.ts",
+    "src/types/**/*.d.ts"
   ],
   "exclude": [
     "src/**/*.stories.tsx",
     "src/**/*.test.ts",
+    "src/**/*.test.tsx",
     "src/main.tsx",
     "src/App.tsx"
   ]

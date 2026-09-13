@@ -9,8 +9,12 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-app
 dist-ssr
 *.local
+
+# Local MCAP fixtures served for dev/testing — never publish sample data
+public/*.mcap
 
 # Editor directories and files
 .vscode/*

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   flattenJsonPayload,
+  formatTimestamp,
   LOG_TIME_COLUMN,
   normalizeTopicAccumulator,
+  PUBLISH_TIME_COLUMN,
   type TopicAccumulator,
 } from './worksheet';
 
@@ -36,15 +38,29 @@ describe('flattenJsonPayload', () => {
 });
 
 describe('normalizeTopicAccumulator', () => {
-  it('keeps _logTime first and null-fills missing columns', () => {
+  it('orders timestamp columns first and null-fills missing columns', () => {
     const accumulator: TopicAccumulator = {
-      columns: new Set([LOG_TIME_COLUMN, 'a', 'b']),
-      rows: [{ _logTime: '1', a: 'x' }],
+      columns: new Set(['b', PUBLISH_TIME_COLUMN, 'a', LOG_TIME_COLUMN]),
+      rows: [{ [LOG_TIME_COLUMN]: '1', a: 'x' }],
     };
 
     expect(normalizeTopicAccumulator(accumulator)).toEqual({
-      columns: [LOG_TIME_COLUMN, 'a', 'b'],
-      rows: [{ _logTime: '1', a: 'x', b: null }],
+      columns: [LOG_TIME_COLUMN, PUBLISH_TIME_COLUMN, 'a', 'b'],
+      rows: [{ [LOG_TIME_COLUMN]: '1', [PUBLISH_TIME_COLUMN]: null, a: 'x', b: null }],
     });
+  });
+});
+
+describe('formatTimestamp', () => {
+  it('renders nanosecond timestamps as ISO 8601', () => {
+    // 2026-09-12T09:14:35.000Z in nanoseconds since the Unix epoch.
+    const nanos = BigInt(Date.UTC(2026, 8, 12, 9, 14, 35)) * 1_000_000n;
+    expect(formatTimestamp(nanos.toString())).toBe('2026-09-12T09:14:35.000Z');
+  });
+
+  it('returns empty string for empty cells and passes through non-timestamps', () => {
+    expect(formatTimestamp(null)).toBe('');
+    expect(formatTimestamp('')).toBe('');
+    expect(formatTimestamp('not-a-number')).toBe('not-a-number');
   });
 });
