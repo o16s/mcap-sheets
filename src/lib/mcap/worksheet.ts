@@ -1,6 +1,38 @@
 export type CellValue = string | number | boolean | null;
 
-export const LOG_TIME_COLUMN = '_logTime';
+// Column keys for the MCAP message timestamps, aligned with the spec's
+// `log_time` / `publish_time` fields. These hold the raw nanosecond counts (as
+// strings, to preserve bigint precision) for filtering/sorting; the UI renders
+// them via formatTimestamp().
+export const LOG_TIME_COLUMN = 'log_time';
+export const PUBLISH_TIME_COLUMN = 'publish_time';
+export const TIMESTAMP_COLUMNS: readonly string[] = [LOG_TIME_COLUMN, PUBLISH_TIME_COLUMN];
+
+/**
+ * Renders a nanosecond-since-epoch timestamp (as stored in the timestamp
+ * columns) into a human-readable ISO 8601 string. Returns the input unchanged
+ * if it is not a valid integer timestamp.
+ */
+export const formatTimestamp = (value: CellValue): string => {
+  if (value === null || value === '') {
+    return '';
+  }
+
+  let nanos: bigint;
+  try {
+    nanos = typeof value === 'number' ? BigInt(Math.trunc(value)) : BigInt(value);
+  } catch {
+    return String(value);
+  }
+
+  const millis = Number(nanos / 1_000_000n);
+  const date = new Date(millis);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toISOString();
+};
 
 type FlatRow = Record<string, CellValue>;
 
@@ -69,13 +101,17 @@ export interface TopicAccumulator {
 }
 
 export const normalizeTopicAccumulator = (accumulator: TopicAccumulator) => {
-  const columns = Array.from(accumulator.columns).sort((left, right) => {
-    if (left === LOG_TIME_COLUMN) {
-      return -1;
-    }
+  // Timestamp columns lead (log_time, then publish_time); everything else is
+  // sorted alphabetically after them.
+  const leadRank = (column: string): number => {
+    const index = TIMESTAMP_COLUMNS.indexOf(column);
+    return index === -1 ? TIMESTAMP_COLUMNS.length : index;
+  };
 
-    if (right === LOG_TIME_COLUMN) {
-      return 1;
+  const columns = Array.from(accumulator.columns).sort((left, right) => {
+    const rankDelta = leadRank(left) - leadRank(right);
+    if (rankDelta !== 0) {
+      return rankDelta;
     }
 
     return left.localeCompare(right);
