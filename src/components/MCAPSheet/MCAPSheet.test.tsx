@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MCAPSheet } from './MCAPSheet';
@@ -78,6 +79,37 @@ describe('MCAPSheet', () => {
     });
 
     await waitFor(() => expect(screen.getByText('1 / 2 rows')).toBeTruthy());
+  });
+
+  it('opens once even when the loader identity changes on re-render', async () => {
+    let loads = 0;
+    const Harness = () => {
+      const [tick, setTick] = useState(0);
+      return (
+        <div>
+          <button type="button" onClick={() => setTick((value) => value + 1)}>
+            rerender {tick}
+          </button>
+          {/* Inline loader → a fresh function identity on every render. */}
+          <MCAPSheet
+            url="mem://test.mcap"
+            dataLoader={() => {
+              loads += 1;
+              return Promise.resolve(workbook);
+            }}
+          />
+        </div>
+      );
+    };
+
+    render(<Harness />);
+    await screen.findByText('2 / 2 rows');
+    fireEvent.click(screen.getByText(/rerender/));
+    fireEvent.click(screen.getByText(/rerender/));
+
+    await waitFor(() => expect(screen.getByText('2 / 2 rows')).toBeTruthy());
+    expect(screen.queryByText('Loading MCAP file…')).toBeNull();
+    expect(loads).toBe(1);
   });
 
   it('applies controlled filters and reports changes', async () => {

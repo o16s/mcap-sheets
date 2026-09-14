@@ -106,33 +106,39 @@ export function MCAPSheet({
   const selectionControlledRef = useRef(false);
   const onSelectionChangeRef = useRef<typeof onSelectionChange>(undefined);
   const onTopicChangeRef = useRef<typeof onTopicChange>(undefined);
+  // Loaders are read from refs so passing an inline `dataLoader`/`workbookOpener`
+  // (a fresh function each render) doesn't retrigger a full reload — the file is
+  // only re-opened when `url` changes. The latest loader is always used at open
+  // time. Refs are initialized to the first render's props (openSource may run
+  // before the ref-sync effect below).
+  const dataLoaderRef = useRef(dataLoader);
+  const workbookOpenerRef = useRef(workbookOpener);
 
   // Resolve the workbook source: an eager `dataLoader` (tests/stories) wrapped
   // into a lazy source, an explicit `workbookOpener`, or the default lazy
   // range-aware opener.
-  const openSource = useCallback(
-    async (target: string): Promise<McapWorkbookSource> => {
-      if (dataLoader) {
-        const worksheets = await dataLoader(target);
-        const byTopic = new Map(worksheets.map((sheet) => [sheet.topic, sheet]));
-        return {
-          topics: worksheets.map((sheet) => ({
-            topic: sheet.topic,
-            messageCount: sheet.rows.length,
-          })),
-          ranged: false,
-          loadTopic: async (topic) => byTopic.get(topic) ?? { topic, columns: [], rows: [] },
-        };
-      }
+  const openSource = useCallback(async (target: string): Promise<McapWorkbookSource> => {
+    const loader = dataLoaderRef.current;
+    if (loader) {
+      const worksheets = await loader(target);
+      const byTopic = new Map(worksheets.map((sheet) => [sheet.topic, sheet]));
+      return {
+        topics: worksheets.map((sheet) => ({
+          topic: sheet.topic,
+          messageCount: sheet.rows.length,
+        })),
+        ranged: false,
+        loadTopic: async (topic) => byTopic.get(topic) ?? { topic, columns: [], rows: [] },
+      };
+    }
 
-      if (workbookOpener) {
-        return workbookOpener(target);
-      }
+    const opener = workbookOpenerRef.current;
+    if (opener) {
+      return opener(target);
+    }
 
-      return openMcapWorkbook(target);
-    },
-    [dataLoader, workbookOpener],
-  );
+    return openMcapWorkbook(target);
+  }, []);
 
   // Open the workbook whenever the URL changes: read the summary, list topics,
   // and select the first one.
@@ -412,7 +418,8 @@ export function MCAPSheet({
     }
   }, [selectedTopic]);
 
-  // Keep refs in sync with the latest render values for document-level handlers.
+  // Keep refs in sync with the latest render values for document-level handlers
+  // and the (url-keyed) open effect.
   useEffect(() => {
     rowDisplayOrderRef.current = rowDisplayOrder;
     visibleColumnsRef.current = visibleColumns;
@@ -421,6 +428,8 @@ export function MCAPSheet({
     selectionControlledRef.current = selection !== undefined;
     onSelectionChangeRef.current = onSelectionChange;
     onTopicChangeRef.current = onTopicChange;
+    dataLoaderRef.current = dataLoader;
+    workbookOpenerRef.current = workbookOpener;
   });
 
   // Rubber-band drag selection: extend the rectangle as the pointer moves over
