@@ -1,9 +1,27 @@
 {
-  "name": "mcap-sheets",
+  "name": "@o16s/mcap-sheets",
   "version": "0.1.0",
   "description": "Reusable React MCAP spreadsheet viewer",
   "type": "module",
   "private": false,
+  "license": "MIT",
+  "author": "o16s",
+  "homepage": "https://o16s.github.io/mcap-sheets/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/o16s/mcap-sheets.git"
+  },
+  "bugs": {
+    "url": "https://github.com/o16s/mcap-sheets/issues"
+  },
+  "keywords": [
+    "mcap",
+    "react",
+    "spreadsheet",
+    "viewer",
+    "robotics",
+    "foxglove"
+  ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,11 +30,15 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
-    }
+    },
+    "./styles.css": "./dist/mcap-sheets.css"
   },
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build && tsc -p tsconfig.build.json",

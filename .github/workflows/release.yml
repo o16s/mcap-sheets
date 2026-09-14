@@ -26,20 +26,24 @@ jobs:
           path: '*.tgz'
 
   publish:
-    if: ${{ secrets.NPM_TOKEN != '' }}
     needs: build-and-pack
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          registry-url: 'https://registry.npmjs.org'
+          # Publish to GitHub Packages; writes an .npmrc that maps the @o16s
+          # scope to this registry and wires up token auth.
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@o16s'
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npm publish --access public
+      - run: npm publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Built-in token with packages:write — no external secret needed.
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
