@@ -14,6 +14,7 @@ export type {
   CellHighlight,
   MCAPSelection,
   CellRef,
+  SortSpec,
 } from './components/MCAPSheet';
 
 // Pure worksheet helpers, exposed so external hosts (e.g. an embedding app that

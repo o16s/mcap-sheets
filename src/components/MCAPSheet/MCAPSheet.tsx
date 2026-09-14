@@ -16,6 +16,7 @@ import { ColumnContextMenu, type ContextMenuItem } from './ColumnContextMenu';
 import { buildColumnPredicate } from './columnFilterModel';
 import { buildClipboardTable } from './clipboard';
 import { cellKey, fromSelection, rectangleCells, toSelection, type CellRef } from './selectionModel';
+import { cycleSort, sortRows, type SortSpec } from './sortModel';
 import { CELL_FONT, HEADER_FONT, measureTextWidth } from './textWidth';
 import type {
   CellValue,
@@ -77,12 +78,15 @@ export function MCAPSheet({
   filters,
   onFiltersChange,
   onTopicChange,
+  sort,
+  onSortChange,
 }: MCAPSheetProps) {
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [selectedTopic, setSelectedTopic] = useState<string>('');
   const [sheetCache, setSheetCache] = useState<Record<string, TopicWorksheet>>({});
   const [ranged, setRanged] = useState(false);
   const [filtersInternal, setFiltersInternal] = useState<ColumnFilters>({});
+  const [sortInternal, setSortInternal] = useState<SortSpec | null>(null);
   const [selectionInternal, setSelectionInternal] = useState<Set<string>>(() => new Set());
   const [columnOrder, setColumnOrder] = useState<ColumnOrderState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
@@ -105,6 +109,7 @@ export function MCAPSheet({
   const visibleColumnsRef = useRef<string[]>([]);
   const commitSelectionRef = useRef<(next: Set<string>) => void>(() => {});
   const filtersControlledRef = useRef(false);
+  const sortControlledRef = useRef(false);
   const selectionControlledRef = useRef(false);
   const onSelectionChangeRef = useRef<typeof onSelectionChange>(undefined);
   const onTopicChangeRef = useRef<typeof onTopicChange>(undefined);
@@ -252,6 +257,18 @@ export function MCAPSheet({
     [filters, filtersInternal, commitFilters],
   );
 
+  // --- Controlled/uncontrolled sort ---
+  const effectiveSort = sort !== undefined ? sort : sortInternal;
+  const commitSort = useCallback(
+    (next: SortSpec | null) => {
+      if (sort === undefined) {
+        setSortInternal(next);
+      }
+      onSortChange?.(next);
+    },
+    [sort, onSortChange],
+  );
+
   // --- Controlled/uncontrolled selection ---
   const effectiveSelectionSet = useMemo(
     () => (selection !== undefined ? fromSelection(selection) : selectionInternal),
@@ -309,6 +326,16 @@ export function MCAPSheet({
     );
   }, [effectiveFilters, columnTypes, selectedSheet]);
 
+  const sortedRows = useMemo(() => {
+    if (!effectiveSort) {
+      return filteredRows;
+    }
+    const numeric =
+      columnTypes[effectiveSort.column]?.kind === 'number' ||
+      TIMESTAMP_COLUMNS.includes(effectiveSort.column);
+    return sortRows(filteredRows, effectiveSort, numeric);
+  }, [filteredRows, effectiveSort, columnTypes]);
+
   const columns = useMemo<ColumnDef<Row>[]>(() => {
     if (!selectedSheet) {
       return [];
@@ -321,7 +348,7 @@ export function MCAPSheet({
   }, [selectedSheet]);
 
   const table = useReactTable({
-    data: filteredRows,
+    data: sortedRows,
     columns,
     state: { columnOrder, columnVisibility, columnSizing },
     onColumnOrderChange: setColumnOrder,
@@ -391,6 +418,9 @@ export function MCAPSheet({
     if (!filtersControlledRef.current) {
       setFiltersInternal({});
     }
+    if (!sortControlledRef.current) {
+      setSortInternal(null);
+    }
 
     if (!selectedSheet) {
       setColumnSizing({});
@@ -428,6 +458,7 @@ export function MCAPSheet({
     visibleColumnsRef.current = visibleColumns;
     commitSelectionRef.current = commitSelection;
     filtersControlledRef.current = filters !== undefined;
+    sortControlledRef.current = sort !== undefined;
     selectionControlledRef.current = selection !== undefined;
     onSelectionChangeRef.current = onSelectionChange;
     onTopicChangeRef.current = onTopicChange;
@@ -645,12 +676,26 @@ export function MCAPSheet({
       ];
     }
 
-    // Column header menu: hide/show columns, plus select-column when selectable.
+    // Column header menu: sort, hide/show columns, plus select-column.
     const leafColumns = table.getAllLeafColumns();
     const hidden = leafColumns.filter((column) => !column.getIsVisible());
     const visibleCount = leafColumns.length - hidden.length;
+    const sortedByThis = effectiveSort?.column === menu.columnId;
 
     const items: ContextMenuItem[] = [
+      {
+        label: 'Sort ascending',
+        onSelect: () => commitSort({ column: menu.columnId, direction: 'asc' }),
+      },
+      {
+        label: 'Sort descending',
+        onSelect: () => commitSort({ column: menu.columnId, direction: 'desc' }),
+      },
+      {
+        label: 'Clear sort',
+        disabled: !sortedByThis,
+        onSelect: () => commitSort(null),
+      },
       {
         label: `Hide "${menu.columnId}"`,
         disabled: visibleCount <= 1,
@@ -682,7 +727,17 @@ export function MCAPSheet({
     }
 
     return items;
-  }, [menu, table, selectable, rows, visibleColumns, effectiveSelectionSet, commitSelection]);
+  }, [
+    menu,
+    table,
+    selectable,
+    rows,
+    visibleColumns,
+    effectiveSelectionSet,
+    commitSelection,
+    effectiveSort,
+    commitSort,
+  ]);
 
   const headers = table.getHeaderGroups()[0]?.headers ?? [];
   const totalWidth = table.getTotalSize();
@@ -770,6 +825,22 @@ export function MCAPSheet({
                       >
                         {columnId}
                       </span>
+                      <button
+                        type="button"
+                        className={`mcap-grid__sort ${effectiveSort?.column === columnId ? 'is-active' : ''}`.trim()}
+                        aria-label={`Sort ${columnId}`}
+                        title="Sort"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          commitSort(cycleSort(effectiveSort, columnId));
+                        }}
+                      >
+                        {effectiveSort?.column === columnId
+                          ? effectiveSort.direction === 'asc'
+                            ? '▲'
+                            : '▼'
+                          : '⇅'}
+                      </button>
                       <div
                         className={`mcap-grid__resizer ${header.column.getIsResizing() ? 'is-resizing' : ''}`.trim()}
                         onMouseDown={header.getResizeHandler()}

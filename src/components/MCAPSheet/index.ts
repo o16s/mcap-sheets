@@ -15,4 +15,5 @@ export type {
   CellHighlight,
   MCAPSelection,
   CellRef,
+  SortSpec,
 } from './types';

@@ -7,6 +7,7 @@ import type {
   ColumnFilters,
   MCAPHighlights,
   MCAPSelection,
+  SortSpec,
   TopicWorksheet,
 } from './types';
 
@@ -105,6 +106,7 @@ function TwoWayDemo() {
   const [highlights, setHighlights] = useState<MCAPHighlights>({ topic: '/imu' });
   const [filters, setFilters] = useState<ColumnFilters>({});
   const [selection, setSelection] = useState<MCAPSelection>({ cells: [] });
+  const [sort, setSort] = useState<SortSpec | null>(null);
 
   const hasSelection = selection.cells.length > 0;
   const distinctColumns = [...new Set(selection.cells.map((cell) => cell.column))];
@@ -121,6 +123,8 @@ function TwoWayDemo() {
           highlights={highlights}
           filters={filters}
           onFiltersChange={setFilters}
+          sort={sort}
+          onSortChange={setSort}
           selection={selection}
           onSelectionChange={setSelection}
           onTopicChange={(next) => {
@@ -128,6 +132,7 @@ function TwoWayDemo() {
             // Highlights are per-topic — scope them and clear on switch.
             setHighlights({ topic: next });
             setFilters({});
+            setSort(null);
           }}
         />
       </div>
@@ -206,12 +211,22 @@ function TwoWayDemo() {
           <button type="button" style={panelBtn} onClick={() => setFilters({})}>
             Clear filters
           </button>
+          <button
+            type="button"
+            style={panelBtn}
+            onClick={() => setSort({ column: LOG_TIME_COLUMN, direction: 'desc' })}
+          >
+            Sort by {LOG_TIME_COLUMN} ↓ from outside
+          </button>
         </section>
 
         <section style={{ borderTop: '1px solid #e5e7eb', paddingTop: 10 }}>
           <strong>Read ← component</strong>
           <p style={{ margin: '6px 0' }}>
             Topic: <code>{topic}</code>
+          </p>
+          <p style={{ margin: '6px 0' }}>
+            Sort: <code>{sort ? `${sort.column} ${sort.direction}` : '(none)'}</code>
           </p>
           <p style={{ margin: '6px 0', color: '#6b7280' }}>
             Tip: click a column header to select it, drag or Shift-click to select a range, then

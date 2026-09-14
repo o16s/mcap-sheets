@@ -7,6 +7,7 @@ import type {
 } from '../../lib/mcap/mcapWorkbook';
 import type { ColumnFilterValue } from './columnFilterModel';
 import type { CellRef, MCAPSelection } from './selectionModel';
+import type { SortSpec } from './sortModel';
 
 /** Highlight for a whole row, by its index into the topic's unfiltered rows. */
 export interface RowHighlight {
@@ -82,6 +83,10 @@ export interface MCAPSheetProps {
   onFiltersChange?: (filters: ColumnFilters) => void;
   /** Fires when the selected topic changes. */
   onTopicChange?: (topic: string) => void;
+  /** Controlled sort (single column). `null` = unsorted. Omit to manage internally. */
+  sort?: SortSpec | null;
+  /** Fires whenever the sort changes. */
+  onSortChange?: (sort: SortSpec | null) => void;
 }
 
 export type {
@@ -93,4 +98,5 @@ export type {
   ColumnType,
   CellRef,
   MCAPSelection,
+  SortSpec,
 };

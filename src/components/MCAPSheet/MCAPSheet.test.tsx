@@ -171,6 +171,40 @@ describe('MCAPSheet', () => {
     );
   });
 
+  it('sorts rows via the header context menu', async () => {
+    const onSortChange = vi.fn();
+    const { container } = render(
+      <MCAPSheet url="mem://test.mcap" dataLoader={loader} onSortChange={onSortChange} />,
+    );
+    const valueTexts = () =>
+      [...container.querySelectorAll('[data-col-id="value"]')].map((el) => el.textContent);
+
+    await screen.findByText('value');
+    await waitFor(() => expect(valueTexts()).toEqual(['1', '2']));
+
+    fireEvent.contextMenu(screen.getByText('value'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Sort descending' }));
+
+    await waitFor(() => expect(valueTexts()).toEqual(['2', '1']));
+    expect(onSortChange).toHaveBeenLastCalledWith({ column: 'value', direction: 'desc' });
+  });
+
+  it('honors a controlled sort prop', async () => {
+    const { container } = render(
+      <MCAPSheet
+        url="mem://test.mcap"
+        dataLoader={loader}
+        sort={{ column: 'value', direction: 'desc' }}
+      />,
+    );
+    await screen.findByText('value');
+    await waitFor(() =>
+      expect(
+        [...container.querySelectorAll('[data-col-id="value"]')].map((el) => el.textContent),
+      ).toEqual(['2', '1']),
+    );
+  });
+
   it('selects a whole column when its header is clicked', async () => {
     const onSelectionChange = vi.fn();
     render(
