@@ -215,10 +215,12 @@
   border-right: 1px solid #e8eaed;
 }
 
-/* Selection outline drawn with an inset shadow so it composes over any
-   embedder highlight background rather than replacing it. */
+/* Excel-style selection: a translucent fill overlaid on the whole cell (via a
+   large inset shadow) so it composes over any embedder highlight background and
+   a multi-cell selection reads as one contiguous region with the grid lines
+   showing through — no per-cell border, no uneven padding. */
 .mcap-grid__td.is-selected {
-  box-shadow: inset 0 0 0 2px var(--mcap-selection, #2563eb);
+  box-shadow: inset 0 0 0 9999px var(--mcap-selection, rgba(37, 99, 235, 0.16));
 }
 
 /* Suppress native text selection while drag-selecting cells. */
@@ -228,6 +230,15 @@
 
 .mcap-grid--selectable .mcap-grid__td {
   cursor: cell;
+}
+
+/* The grid is focusable (tabIndex) so it can receive Cmd/Ctrl+C — hide the ring. */
+.mcap-grid:focus {
+  outline: none;
+}
+
+.mcap-grid--selectable .mcap-grid__th-label {
+  cursor: pointer;
 }
 
 /* Right-click column menu */

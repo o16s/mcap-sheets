@@ -213,6 +213,10 @@ function TwoWayDemo() {
           <p style={{ margin: '6px 0' }}>
             Topic: <code>{topic}</code>
           </p>
+          <p style={{ margin: '6px 0', color: '#6b7280' }}>
+            Tip: click a column header to select it, drag or Shift-click to select a range, then
+            press ⌘/Ctrl+C to copy into Excel.
+          </p>
           <p style={{ margin: '6px 0' }}>Selection ({selection.cells.length} cells):</p>
           <pre style={{ margin: 0, maxHeight: 120, overflow: 'auto', background: '#f8fafc', padding: 8, borderRadius: 6 }}>
             {selection.cells.map((cell) => `r${cell.rowIndex} · ${cell.column}`).join('\n') || '(none)'}

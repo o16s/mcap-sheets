@@ -14,6 +14,7 @@ import { inferColumnType, type ColumnType } from '../../lib/mcap/columnTypes';
 import { ColumnFilter } from './ColumnFilter';
 import { ColumnContextMenu, type ContextMenuItem } from './ColumnContextMenu';
 import { buildColumnPredicate } from './columnFilterModel';
+import { buildClipboardTable } from './clipboard';
 import { cellKey, fromSelection, rectangleCells, toSelection, type CellRef } from './selectionModel';
 import { CELL_FONT, HEADER_FONT, measureTextWidth } from './textWidth';
 import type {
@@ -97,6 +98,7 @@ export function MCAPSheet({
   const scrollRef = useRef<HTMLDivElement>(null);
   // Selection interaction refs (read by document-level drag handlers).
   const anchorRef = useRef<CellRef | null>(null);
+  const columnAnchorRef = useRef<string | null>(null);
   const baseRef = useRef<Set<string>>(new Set());
   const draggingRef = useRef(false);
   const rowDisplayOrderRef = useRef<number[]>([]);
@@ -407,6 +409,7 @@ export function MCAPSheet({
   // are read from refs so a parent re-render doesn't re-trigger it.
   useEffect(() => {
     anchorRef.current = null;
+    columnAnchorRef.current = null;
     baseRef.current = new Set();
     draggingRef.current = false;
     if (!selectionControlledRef.current) {
@@ -470,6 +473,9 @@ export function MCAPSheet({
     };
   }, [selectable]);
 
+  // Focus the grid so its `onCopy` handler receives Cmd/Ctrl+C.
+  const focusGrid = () => scrollRef.current?.focus({ preventScroll: true });
+
   const handleCellMouseDown = (
     event: React.MouseEvent,
     rowIndex: number,
@@ -479,6 +485,8 @@ export function MCAPSheet({
       return;
     }
     event.preventDefault();
+    focusGrid();
+    columnAnchorRef.current = null;
     const key = cellKey(rowIndex, column);
 
     if (event.shiftKey && anchorRef.current) {
@@ -509,6 +517,63 @@ export function MCAPSheet({
     anchorRef.current = { rowIndex, column };
     draggingRef.current = true;
     commitSelection(new Set([key]));
+  };
+
+  // Click a column header to select the whole column (Cmd/Ctrl adds, Shift
+  // selects a contiguous column range) — like clicking a column in Excel.
+  const handleHeaderClick = (event: React.MouseEvent, column: string) => {
+    if (!selectable) {
+      return;
+    }
+    focusGrid();
+    anchorRef.current = null;
+    const cellsOf = (columns: string[]) =>
+      columns.flatMap((col) => rows.map((row) => cellKey(Number(row.id), col)));
+
+    if (event.shiftKey && columnAnchorRef.current) {
+      const from = visibleColumns.indexOf(columnAnchorRef.current);
+      const to = visibleColumns.indexOf(column);
+      if (from !== -1 && to !== -1) {
+        const [lo, hi] = from <= to ? [from, to] : [to, from];
+        const next = new Set(baseRef.current);
+        for (const key of cellsOf(visibleColumns.slice(lo, hi + 1))) next.add(key);
+        commitSelection(next);
+        return;
+      }
+    }
+
+    columnAnchorRef.current = column;
+    if (event.metaKey || event.ctrlKey) {
+      const next = new Set(effectiveSelectionSet);
+      for (const key of cellsOf([column])) next.add(key);
+      baseRef.current = new Set(next);
+      commitSelection(next);
+      return;
+    }
+
+    const next = new Set(cellsOf([column]));
+    baseRef.current = new Set(next);
+    commitSelection(next);
+  };
+
+  // Serialize the current selection to the clipboard as TSV (+ an HTML table)
+  // so it pastes into Excel/Sheets with proper cell structure.
+  const handleCopy = (event: React.ClipboardEvent) => {
+    if (!selectedSheet) {
+      return;
+    }
+    const table = buildClipboardTable(
+      effectiveSelectionSet,
+      rowDisplayOrder,
+      visibleColumns,
+      (rowIndex, column) => cellDisplayText(column, selectedSheet.rows[rowIndex][column]),
+    );
+    if (!table) {
+      return;
+    }
+    event.preventDefault();
+    event.clipboardData.setData('text/plain', table.text);
+    event.clipboardData.setData('text/html', table.html);
   };
 
   const autoSizeColumn = useCallback(
@@ -661,6 +726,8 @@ export function MCAPSheet({
           className={`mcap-sheet__table-wrap mcap-grid ${selectable ? 'mcap-grid--selectable' : ''}`.trim()}
           style={fill ? undefined : { height }}
           ref={scrollRef}
+          tabIndex={selectable ? 0 : undefined}
+          onCopy={selectable ? handleCopy : undefined}
         >
           <div className="mcap-grid__inner" style={{ width: totalWidth }}>
             <div className="mcap-grid__thead">
@@ -695,6 +762,7 @@ export function MCAPSheet({
                           event.preventDefault();
                           reorderColumn(columnId);
                         }}
+                        onClick={selectable ? (event) => handleHeaderClick(event, columnId) : undefined}
                         onContextMenu={(event) => {
                           event.preventDefault();
                           setMenu({ x: event.clientX, y: event.clientY, columnId });

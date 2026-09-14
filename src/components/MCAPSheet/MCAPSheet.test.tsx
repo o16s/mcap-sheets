@@ -171,6 +171,37 @@ describe('MCAPSheet', () => {
     );
   });
 
+  it('selects a whole column when its header is clicked', async () => {
+    const onSelectionChange = vi.fn();
+    render(
+      <MCAPSheet url="mem://test.mcap" dataLoader={loader} selectable onSelectionChange={onSelectionChange} />,
+    );
+
+    fireEvent.click(await screen.findByText('value'));
+
+    const last: MCAPSelection = onSelectionChange.mock.calls.at(-1)![0];
+    expect(new Set(last.cells.map((c) => `${c.rowIndex}|${c.column}`))).toEqual(
+      new Set(['0|value', '1|value']),
+    );
+  });
+
+  it('copies the selection to the clipboard as TSV and HTML', async () => {
+    const { container } = render(
+      <MCAPSheet url="mem://test.mcap" dataLoader={loader} selectable />,
+    );
+
+    await screen.findByText('value');
+    await waitFor(() => expect(cellAt(container, 0, 'value')).toBeTruthy());
+    fireEvent.mouseDown(cellAt(container, 0, 'value')!, { button: 0 });
+    fireEvent.mouseDown(cellAt(container, 1, 'value')!, { button: 0, shiftKey: true });
+
+    const setData = vi.fn();
+    fireEvent.copy(container.querySelector('.mcap-grid')!, { clipboardData: { setData } });
+
+    expect(setData).toHaveBeenCalledWith('text/plain', '1\n2');
+    expect(setData).toHaveBeenCalledWith('text/html', expect.stringContaining('<table>'));
+  });
+
   it('selects a whole row from the cell context menu', async () => {
     const onSelectionChange = vi.fn();
     const { container } = render(
