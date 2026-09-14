@@ -13,19 +13,12 @@
 .mcap-sheet__toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   padding: 10px 14px;
   border-bottom: 1px solid #e8eaed;
   background: #f8f9fa;
   font-size: 13px;
-}
-
-.mcap-sheet__source {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .mcap-sheet__meta {
@@ -220,6 +213,21 @@
   background: #fff;
   border-bottom: 1px solid #e8eaed;
   border-right: 1px solid #e8eaed;
+}
+
+/* Selection outline drawn with an inset shadow so it composes over any
+   embedder highlight background rather than replacing it. */
+.mcap-grid__td.is-selected {
+  box-shadow: inset 0 0 0 2px var(--mcap-selection, #2563eb);
+}
+
+/* Suppress native text selection while drag-selecting cells. */
+.mcap-grid--selectable .mcap-grid__tbody {
+  user-select: none;
+}
+
+.mcap-grid--selectable .mcap-grid__td {
+  cursor: cell;
 }
 
 /* Right-click column menu */

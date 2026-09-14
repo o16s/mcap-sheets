@@ -13,10 +13,13 @@ import { formatTimestamp, TIMESTAMP_COLUMNS } from '../../lib/mcap/worksheet';
 import { inferColumnType, type ColumnType } from '../../lib/mcap/columnTypes';
 import { ColumnFilter } from './ColumnFilter';
 import { ColumnContextMenu, type ContextMenuItem } from './ColumnContextMenu';
-import { buildColumnPredicate, type ColumnFilterValue } from './columnFilterModel';
+import { buildColumnPredicate } from './columnFilterModel';
+import { cellKey, fromSelection, rectangleCells, toSelection, type CellRef } from './selectionModel';
 import { CELL_FONT, HEADER_FONT, measureTextWidth } from './textWidth';
 import type {
   CellValue,
+  ColumnFilters,
+  ColumnFilterValue,
   McapWorkbookSource,
   MCAPSheetProps,
   TopicSummary,
@@ -66,22 +69,43 @@ export function MCAPSheet({
   rowHeight = 36,
   dataLoader,
   workbookOpener,
+  highlights,
+  selectable = false,
+  selection,
+  onSelectionChange,
+  filters,
+  onFiltersChange,
+  onTopicChange,
 }: MCAPSheetProps) {
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [selectedTopic, setSelectedTopic] = useState<string>('');
   const [sheetCache, setSheetCache] = useState<Record<string, TopicWorksheet>>({});
   const [ranged, setRanged] = useState(false);
-  const [columnFilters, setColumnFilters] = useState<Record<string, ColumnFilterValue>>({});
+  const [filtersInternal, setFiltersInternal] = useState<ColumnFilters>({});
+  const [selectionInternal, setSelectionInternal] = useState<Set<string>>(() => new Set());
   const [columnOrder, setColumnOrder] = useState<ColumnOrderState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
-  const [menu, setMenu] = useState<{ x: number; y: number; columnId: string } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; columnId: string; rowIndex?: number } | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
-  const draggedColumnRef = useRef<string | null>(null);
-  const sourceRef = useRef<McapWorkbookSource | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [topicError, setTopicError] = useState<string | null>(null);
+
+  const draggedColumnRef = useRef<string | null>(null);
+  const sourceRef = useRef<McapWorkbookSource | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Selection interaction refs (read by document-level drag handlers).
+  const anchorRef = useRef<CellRef | null>(null);
+  const baseRef = useRef<Set<string>>(new Set());
+  const draggingRef = useRef(false);
+  const rowDisplayOrderRef = useRef<number[]>([]);
+  const visibleColumnsRef = useRef<string[]>([]);
+  const commitSelectionRef = useRef<(next: Set<string>) => void>(() => {});
+  const filtersControlledRef = useRef(false);
+  const selectionControlledRef = useRef(false);
+  const onSelectionChangeRef = useRef<typeof onSelectionChange>(undefined);
+  const onTopicChangeRef = useRef<typeof onTopicChange>(undefined);
 
   // Resolve the workbook source: an eager `dataLoader` (tests/stories) wrapped
   // into a lazy source, an explicit `workbookOpener`, or the default lazy
@@ -97,8 +121,7 @@ export function MCAPSheet({
             messageCount: sheet.rows.length,
           })),
           ranged: false,
-          loadTopic: async (topic) =>
-            byTopic.get(topic) ?? { topic, columns: [], rows: [] },
+          loadTopic: async (topic) => byTopic.get(topic) ?? { topic, columns: [], rows: [] },
         };
       }
 
@@ -183,24 +206,58 @@ export function MCAPSheet({
 
   const selectedSheet = sheetCache[selectedTopic];
 
-  // Reset all column state whenever the active sheet (and therefore its column
-  // set) changes, and auto-fit each column to its content.
-  useEffect(() => {
-    setColumnOrder(selectedSheet ? [...selectedSheet.columns] : []);
-    setColumnVisibility({});
-    setColumnFilters({});
-
-    if (!selectedSheet) {
-      setColumnSizing({});
-      return;
+  // Stable identity: index into the UNFILTERED rows. Relies on filtering never
+  // cloning row objects (see `filteredRows` below) — `row.original` is the same
+  // object reference held here, so `row.id` is the original index.
+  const rowIndexByRef = useMemo(() => {
+    const map = new Map<Row, number>();
+    if (selectedSheet) {
+      selectedSheet.rows.forEach((row, index) => map.set(row, index));
     }
-
-    const sizing: ColumnSizingState = {};
-    for (const column of selectedSheet.columns) {
-      sizing[column] = computeColumnWidth(column, selectedSheet.rows);
-    }
-    setColumnSizing(sizing);
+    return map;
   }, [selectedSheet]);
+
+  // --- Controlled/uncontrolled filters ---
+  const effectiveFilters = filters ?? filtersInternal;
+  const commitFilters = useCallback(
+    (next: ColumnFilters) => {
+      if (filters === undefined) {
+        setFiltersInternal(next);
+      }
+      onFiltersChange?.(next);
+    },
+    [filters, onFiltersChange],
+  );
+  const setColumnFilter = useCallback(
+    (column: string, next: ColumnFilterValue | undefined) => {
+      const current = filters ?? filtersInternal;
+      if (!next) {
+        if (!(column in current)) {
+          return;
+        }
+        const { [column]: _removed, ...rest } = current;
+        commitFilters(rest);
+        return;
+      }
+      commitFilters({ ...current, [column]: next });
+    },
+    [filters, filtersInternal, commitFilters],
+  );
+
+  // --- Controlled/uncontrolled selection ---
+  const effectiveSelectionSet = useMemo(
+    () => (selection !== undefined ? fromSelection(selection) : selectionInternal),
+    [selection, selectionInternal],
+  );
+  const commitSelection = useCallback(
+    (next: Set<string>) => {
+      if (selection === undefined) {
+        setSelectionInternal(next);
+      }
+      onSelectionChange?.(toSelection(next));
+    },
+    [selection, onSelectionChange],
+  );
 
   const columnTypes = useMemo(() => {
     const types: Record<string, ColumnType> = {};
@@ -229,7 +286,7 @@ export function MCAPSheet({
     const predicates = selectedSheet.columns
       .map((column) => ({
         column,
-        predicate: buildColumnPredicate(columnFilters[column], columnTypes[column]),
+        predicate: buildColumnPredicate(effectiveFilters[column], columnTypes[column]),
       }))
       .filter((entry): entry is { column: string; predicate: (value: CellValue) => boolean } =>
         entry.predicate !== null,
@@ -242,7 +299,7 @@ export function MCAPSheet({
     return selectedSheet.rows.filter((row) =>
       predicates.every(({ column, predicate }) => predicate(row[column])),
     );
-  }, [columnFilters, columnTypes, selectedSheet]);
+  }, [effectiveFilters, columnTypes, selectedSheet]);
 
   const columns = useMemo<ColumnDef<Row>[]>(() => {
     if (!selectedSheet) {
@@ -263,11 +320,11 @@ export function MCAPSheet({
     onColumnVisibilityChange: setColumnVisibility,
     onColumnSizingChange: setColumnSizing,
     columnResizeMode: 'onChange',
+    getRowId: (row) => String(rowIndexByRef.get(row) ?? -1),
     getCoreRowModel: getCoreRowModel(),
     defaultColumn: { minSize: MIN_COLUMN_WIDTH, size: 150 },
   });
 
-  const scrollRef = useRef<HTMLDivElement>(null);
   const rows = table.getRowModel().rows;
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
@@ -276,19 +333,174 @@ export function MCAPSheet({
     overscan: 12,
   });
 
-  const setColumnFilter = useCallback((column: string, next: ColumnFilterValue | undefined) => {
-    setColumnFilters((current) => {
-      if (!next) {
-        if (!(column in current)) {
-          return current;
-        }
-        const { [column]: _removed, ...rest } = current;
-        return rest;
-      }
+  // Order maps for range/column/row selection — computed from the models, so
+  // they are correct even for rows/columns that aren't currently rendered.
+  const rowDisplayOrder = useMemo(() => rows.map((row) => Number(row.id)), [rows]);
+  // Visible columns in display order — mirrors TanStack's leaf order/visibility
+  // (order is reset to the full column set on every sheet change).
+  const visibleColumns = useMemo(() => {
+    const order = columnOrder.length > 0 ? columnOrder : (selectedSheet?.columns ?? []);
+    return order.filter((id) => columnVisibility[id] !== false);
+  }, [columnOrder, columnVisibility, selectedSheet]);
 
-      return { ...current, [column]: next };
-    });
-  }, []);
+  // Bounds-checked highlight lookup maps, ignored when scoped to another topic.
+  const { rowHi, colHi, cellHi } = useMemo(() => {
+    const rowHi = new Map<number, string>();
+    const colHi = new Map<string, string>();
+    const cellHi = new Map<string, string>();
+
+    if (
+      !selectedSheet ||
+      !highlights ||
+      (highlights.topic !== undefined && highlights.topic !== selectedTopic)
+    ) {
+      return { rowHi, colHi, cellHi };
+    }
+
+    const rowCount = selectedSheet.rows.length;
+    const columnSet = new Set(selectedSheet.columns);
+    const inRange = (rowIndex: number) => rowIndex >= 0 && rowIndex < rowCount;
+
+    for (const { rowIndex, color } of highlights.rows ?? []) {
+      if (inRange(rowIndex)) rowHi.set(rowIndex, color);
+    }
+    for (const { column, color } of highlights.columns ?? []) {
+      if (columnSet.has(column)) colHi.set(column, color);
+    }
+    for (const { rowIndex, column, color } of highlights.cells ?? []) {
+      if (inRange(rowIndex) && columnSet.has(column)) cellHi.set(cellKey(rowIndex, column), color);
+    }
+
+    return { rowHi, colHi, cellHi };
+  }, [highlights, selectedSheet, selectedTopic]);
+
+  // Reset view state (order/visibility/sizing) and auto-fit whenever the active
+  // sheet changes. Filters reset only when uncontrolled (never clobber a
+  // controlled embedder's filters).
+  useEffect(() => {
+    setColumnOrder(selectedSheet ? [...selectedSheet.columns] : []);
+    setColumnVisibility({});
+    if (!filtersControlledRef.current) {
+      setFiltersInternal({});
+    }
+
+    if (!selectedSheet) {
+      setColumnSizing({});
+      return;
+    }
+
+    const sizing: ColumnSizingState = {};
+    for (const column of selectedSheet.columns) {
+      sizing[column] = computeColumnWidth(column, selectedSheet.rows);
+    }
+    setColumnSizing(sizing);
+  }, [selectedSheet]);
+
+  // On topic change: clear selection (+ notify) and report the new topic. Keyed
+  // on `selectedTopic` only (fires on tab click, before rows load); callbacks
+  // are read from refs so a parent re-render doesn't re-trigger it.
+  useEffect(() => {
+    anchorRef.current = null;
+    baseRef.current = new Set();
+    draggingRef.current = false;
+    if (!selectionControlledRef.current) {
+      setSelectionInternal(new Set());
+    }
+    onSelectionChangeRef.current?.({ cells: [] });
+    if (selectedTopic) {
+      onTopicChangeRef.current?.(selectedTopic);
+    }
+  }, [selectedTopic]);
+
+  // Keep refs in sync with the latest render values for document-level handlers.
+  useEffect(() => {
+    rowDisplayOrderRef.current = rowDisplayOrder;
+    visibleColumnsRef.current = visibleColumns;
+    commitSelectionRef.current = commitSelection;
+    filtersControlledRef.current = filters !== undefined;
+    selectionControlledRef.current = selection !== undefined;
+    onSelectionChangeRef.current = onSelectionChange;
+    onTopicChangeRef.current = onTopicChange;
+  });
+
+  // Rubber-band drag selection: extend the rectangle as the pointer moves over
+  // cells, ending on mouse up. Attached once while `selectable`.
+  useEffect(() => {
+    if (!selectable) {
+      return;
+    }
+    const onMove = (event: MouseEvent) => {
+      if (!draggingRef.current || !anchorRef.current) {
+        return;
+      }
+      const target = (event.target as HTMLElement | null)?.closest?.(
+        '[data-row-id][data-col-id]',
+      ) as HTMLElement | null;
+      if (!target) {
+        return;
+      }
+      const focus = { rowIndex: Number(target.dataset.rowId), column: target.dataset.colId ?? '' };
+      const rect = rectangleCells(
+        anchorRef.current,
+        focus,
+        rowDisplayOrderRef.current,
+        visibleColumnsRef.current,
+      );
+      if (rect.length > 0) {
+        commitSelectionRef.current(new Set(rect));
+      }
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+  }, [selectable]);
+
+  const handleCellMouseDown = (
+    event: React.MouseEvent,
+    rowIndex: number,
+    column: string,
+  ) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    const key = cellKey(rowIndex, column);
+
+    if (event.shiftKey && anchorRef.current) {
+      const rect = rectangleCells(anchorRef.current, { rowIndex, column }, rowDisplayOrder, visibleColumns);
+      if (rect.length > 0) {
+        const next = new Set(baseRef.current);
+        for (const cell of rect) next.add(cell);
+        commitSelection(next);
+        return;
+      }
+    }
+
+    if (event.metaKey || event.ctrlKey) {
+      const next = new Set(effectiveSelectionSet);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      baseRef.current = new Set(next);
+      anchorRef.current = { rowIndex, column };
+      commitSelection(next);
+      return;
+    }
+
+    // Plain click: start a single selection that a drag can extend.
+    baseRef.current = new Set();
+    anchorRef.current = { rowIndex, column };
+    draggingRef.current = true;
+    commitSelection(new Set([key]));
+  };
 
   const autoSizeColumn = useCallback(
     (columnId: string) => {
@@ -331,6 +543,35 @@ export function MCAPSheet({
       return [];
     }
 
+    const selectColumn = () => {
+      commitSelection(new Set(rows.map((row) => cellKey(Number(row.id), menu.columnId))));
+      anchorRef.current = null;
+    };
+
+    // Cell context menu (only when selectable): row/column/clear selection.
+    if (menu.rowIndex !== undefined) {
+      const rowIndex = menu.rowIndex;
+      return [
+        {
+          label: 'Select row',
+          onSelect: () => {
+            commitSelection(new Set(visibleColumns.map((column) => cellKey(rowIndex, column))));
+            anchorRef.current = null;
+          },
+        },
+        { label: `Select column "${menu.columnId}"`, onSelect: selectColumn },
+        {
+          label: 'Clear selection',
+          disabled: effectiveSelectionSet.size === 0,
+          onSelect: () => {
+            commitSelection(new Set());
+            anchorRef.current = null;
+          },
+        },
+      ];
+    }
+
+    // Column header menu: hide/show columns, plus select-column when selectable.
     const leafColumns = table.getAllLeafColumns();
     const hidden = leafColumns.filter((column) => !column.getIsVisible());
     const visibleCount = leafColumns.length - hidden.length;
@@ -362,8 +603,12 @@ export function MCAPSheet({
       onSelect: () => setColumnVisibility({}),
     });
 
+    if (selectable) {
+      items.push({ label: `Select column "${menu.columnId}"`, onSelect: selectColumn });
+    }
+
     return items;
-  }, [menu, table]);
+  }, [menu, table, selectable, rows, visibleColumns, effectiveSelectionSet, commitSelection]);
 
   const headers = table.getHeaderGroups()[0]?.headers ?? [];
   const totalWidth = table.getTotalSize();
@@ -375,9 +620,6 @@ export function MCAPSheet({
   return (
     <section className={`mcap-sheet ${fill ? 'mcap-sheet--fill' : ''} ${className ?? ''}`.trim()}>
       <header className="mcap-sheet__toolbar">
-        <span className="mcap-sheet__source" title={url}>
-          {url}
-        </span>
         <span className="mcap-sheet__meta">
           {ranged ? (
             <span className="mcap-sheet__badge" title="Reading via HTTP range requests">
@@ -407,7 +649,7 @@ export function MCAPSheet({
 
       {showGrid ? (
         <div
-          className="mcap-sheet__table-wrap mcap-grid"
+          className={`mcap-sheet__table-wrap mcap-grid ${selectable ? 'mcap-grid--selectable' : ''}`.trim()}
           style={fill ? undefined : { height }}
           ref={scrollRef}
         >
@@ -474,7 +716,7 @@ export function MCAPSheet({
                       <ColumnFilter
                         column={columnId}
                         type={columnTypes[columnId] ?? { kind: 'text' }}
-                        value={columnFilters[columnId]}
+                        value={effectiveFilters[columnId]}
                         onChange={(next) => setColumnFilter(columnId, next)}
                       />
                     </div>
@@ -486,6 +728,7 @@ export function MCAPSheet({
             <div className="mcap-grid__tbody" style={{ height: rowVirtualizer.getTotalSize() }}>
               {virtualRows.map((virtualRow) => {
                 const row = rows[virtualRow.index];
+                const rowIndex = Number(row.id);
                 return (
                   <div
                     key={row.id}
@@ -499,12 +742,28 @@ export function MCAPSheet({
                       const isTimestamp = TIMESTAMP_COLUMNS.includes(columnId);
                       const raw = toCellText(value);
                       const text = isTimestamp ? formatTimestamp(value) : raw;
+                      const key = cellKey(rowIndex, columnId);
+                      const background = cellHi.get(key) ?? rowHi.get(rowIndex) ?? colHi.get(columnId);
+                      const width = cell.column.getSize();
                       return (
                         <div
                           key={cell.id}
-                          className="mcap-grid__td"
-                          style={{ width: cell.column.getSize() }}
+                          className={`mcap-grid__td ${effectiveSelectionSet.has(key) ? 'is-selected' : ''}`.trim()}
+                          style={background ? { width, background } : { width }}
                           title={isTimestamp ? raw : text}
+                          data-row-id={rowIndex}
+                          data-col-id={columnId}
+                          onMouseDown={
+                            selectable ? (event) => handleCellMouseDown(event, rowIndex, columnId) : undefined
+                          }
+                          onContextMenu={
+                            selectable
+                              ? (event) => {
+                                  event.preventDefault();
+                                  setMenu({ x: event.clientX, y: event.clientY, columnId, rowIndex });
+                                }
+                              : undefined
+                          }
                         >
                           {text}
                         </div>
@@ -537,12 +796,7 @@ export function MCAPSheet({
       ) : null}
 
       {menu ? (
-        <ColumnContextMenu
-          x={menu.x}
-          y={menu.y}
-          items={menuItems}
-          onClose={() => setMenu(null)}
-        />
+        <ColumnContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
       ) : null}
     </section>
   );

@@ -5,6 +5,15 @@ export type {
   TopicSummary,
   McapWorkbookSource,
   CellValue,
+  ColumnFilterValue,
+  ColumnType,
+  ColumnFilters,
+  MCAPHighlights,
+  RowHighlight,
+  ColumnHighlight,
+  CellHighlight,
+  MCAPSelection,
+  CellRef,
 } from './components/MCAPSheet';
 
 // Pure worksheet helpers, exposed so external hosts (e.g. an embedding app that

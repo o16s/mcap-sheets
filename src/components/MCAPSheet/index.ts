@@ -6,4 +6,13 @@ export type {
   TopicSummary,
   McapWorkbookSource,
   CellValue,
+  ColumnFilterValue,
+  ColumnType,
+  ColumnFilters,
+  MCAPHighlights,
+  RowHighlight,
+  ColumnHighlight,
+  CellHighlight,
+  MCAPSelection,
+  CellRef,
 } from './types';
