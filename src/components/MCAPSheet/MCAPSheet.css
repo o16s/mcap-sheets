@@ -13,19 +13,12 @@
 .mcap-sheet__toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   padding: 10px 14px;
   border-bottom: 1px solid #e8eaed;
   background: #f8f9fa;
   font-size: 13px;
-}
-
-.mcap-sheet__source {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .mcap-sheet__meta {
@@ -169,6 +162,29 @@
   cursor: grabbing;
 }
 
+.mcap-grid__sort {
+  flex: none;
+  border: none;
+  background: none;
+  padding: 0 4px;
+  margin-right: 2px;
+  font-size: 10px;
+  line-height: 1;
+  color: #1a73e8;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.mcap-grid__th:hover .mcap-grid__sort,
+.mcap-grid__sort.is-active {
+  opacity: 1;
+}
+
+.mcap-grid__sort:not(.is-active) {
+  color: #9aa0a6;
+}
+
 .mcap-grid__resizer {
   position: absolute;
   top: 0;
@@ -220,6 +236,32 @@
   background: #fff;
   border-bottom: 1px solid #e8eaed;
   border-right: 1px solid #e8eaed;
+}
+
+/* Excel-style selection: a translucent fill overlaid on the whole cell (via a
+   large inset shadow) so it composes over any embedder highlight background and
+   a multi-cell selection reads as one contiguous region with the grid lines
+   showing through — no per-cell border, no uneven padding. */
+.mcap-grid__td.is-selected {
+  box-shadow: inset 0 0 0 9999px var(--mcap-selection, rgba(37, 99, 235, 0.16));
+}
+
+/* Suppress native text selection while drag-selecting cells. */
+.mcap-grid--selectable .mcap-grid__tbody {
+  user-select: none;
+}
+
+.mcap-grid--selectable .mcap-grid__td {
+  cursor: cell;
+}
+
+/* The grid is focusable (tabIndex) so it can receive Cmd/Ctrl+C — hide the ring. */
+.mcap-grid:focus {
+  outline: none;
+}
+
+.mcap-grid--selectable .mcap-grid__th-label {
+  cursor: pointer;
 }
 
 /* Right-click column menu */
