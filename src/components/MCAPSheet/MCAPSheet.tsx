@@ -80,6 +80,8 @@ export function MCAPSheet({
   onTopicChange,
   sort,
   onSortChange,
+  onRowsLoaded,
+  scrollToRowIndex,
 }: MCAPSheetProps) {
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [selectedTopic, setSelectedTopic] = useState<string>('');
@@ -113,6 +115,7 @@ export function MCAPSheet({
   const selectionControlledRef = useRef(false);
   const onSelectionChangeRef = useRef<typeof onSelectionChange>(undefined);
   const onTopicChangeRef = useRef<typeof onTopicChange>(undefined);
+  const onRowsLoadedRef = useRef<typeof onRowsLoaded>(undefined);
   // Loaders are read from refs so passing an inline `dataLoader`/`workbookOpener`
   // (a fresh function each render) doesn't retrigger a full reload — the file is
   // only re-opened when `url` changes. The latest loader is always used at open
@@ -462,9 +465,30 @@ export function MCAPSheet({
     selectionControlledRef.current = selection !== undefined;
     onSelectionChangeRef.current = onSelectionChange;
     onTopicChangeRef.current = onTopicChange;
+    onRowsLoadedRef.current = onRowsLoaded;
     dataLoaderRef.current = dataLoader;
     workbookOpenerRef.current = workbookOpener;
   });
+
+  // Report the current topic's rows to the embedder once available, so it can
+  // map row values (e.g. a timestamp column) to a rowIndex.
+  useEffect(() => {
+    if (selectedSheet) {
+      onRowsLoadedRef.current?.(selectedTopic, selectedSheet.rows);
+    }
+  }, [selectedSheet, selectedTopic]);
+
+  // Scroll a requested (unfiltered) row into view, when it is in the current
+  // display order (i.e. not filtered out).
+  useEffect(() => {
+    if (scrollToRowIndex == undefined) {
+      return;
+    }
+    const position = rowDisplayOrder.indexOf(scrollToRowIndex);
+    if (position >= 0) {
+      rowVirtualizer.scrollToIndex(position, { align: 'center' });
+    }
+  }, [scrollToRowIndex, rowDisplayOrder, rowVirtualizer]);
 
   // Rubber-band drag selection: extend the rectangle as the pointer moves over
   // cells, ending on mouse up. Attached once while `selectable`.

@@ -87,6 +87,17 @@ export interface MCAPSheetProps {
   sort?: SortSpec | null;
   /** Fires whenever the sort changes. */
   onSortChange?: (sort: SortSpec | null) => void;
+  /**
+   * Fires with the current topic's rows whenever they become available (on a
+   * topic switch or reload). Lets an embedder map row values (e.g. a timestamp
+   * column) to `rowIndex` for `highlights`/`scrollToRowIndex`.
+   */
+  onRowsLoaded?: (topic: string, rows: readonly Record<string, CellValue>[]) => void;
+  /**
+   * Scroll a row into view by its index into the topic's UNFILTERED rows.
+   * Ignored when that row is filtered out of the current view.
+   */
+  scrollToRowIndex?: number;
 }
 
 export type {
