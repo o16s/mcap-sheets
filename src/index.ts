@@ -15,6 +15,8 @@ export type {
   MCAPSelection,
   CellRef,
   SortSpec,
+  LoadProgress,
+  ProgressPhase,
 } from './components/MCAPSheet';
 
 // Pure worksheet helpers, exposed so external hosts (e.g. an embedding app that

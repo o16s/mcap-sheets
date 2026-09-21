@@ -8,7 +8,7 @@ import {
   type VisibilityState,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { openMcapWorkbook } from '../../lib/mcap/mcapWorkbook';
+import { openMcapWorkbook, type LoadProgress } from '../../lib/mcap/mcapWorkbook';
 import { formatTimestamp, TIMESTAMP_COLUMNS } from '../../lib/mcap/worksheet';
 import { inferColumnType, type ColumnType } from '../../lib/mcap/columnTypes';
 import { ColumnFilter } from './ColumnFilter';
@@ -87,6 +87,8 @@ export function MCAPSheet({
   const [selectedTopic, setSelectedTopic] = useState<string>('');
   const [sheetCache, setSheetCache] = useState<Record<string, TopicWorksheet>>({});
   const [ranged, setRanged] = useState(false);
+  const [recovered, setRecovered] = useState(false);
+  const [progress, setProgress] = useState<LoadProgress | null>(null);
   const [filtersInternal, setFiltersInternal] = useState<ColumnFilters>({});
   const [sortInternal, setSortInternal] = useState<SortSpec | null>(null);
   const [selectionInternal, setSelectionInternal] = useState<Set<string>>(() => new Set());
@@ -147,7 +149,7 @@ export function MCAPSheet({
       return opener(target);
     }
 
-    return openMcapWorkbook(target);
+    return openMcapWorkbook(target, { onProgress: setProgress });
   }, []);
 
   // Open the workbook whenever the URL changes: read the summary, list topics,
@@ -158,6 +160,8 @@ export function MCAPSheet({
     setLoading(true);
     setError(null);
     setTopicError(null);
+    setProgress(null);
+    setRecovered(false);
     sourceRef.current = null;
     setTopics([]);
     setSheetCache({});
@@ -171,6 +175,8 @@ export function MCAPSheet({
         sourceRef.current = source;
         setTopics(source.topics);
         setRanged(source.ranged);
+        setRecovered(source.recovered ?? false);
+        setProgress(null);
         setSelectedTopic(source.topics[0]?.topic ?? '');
       })
       .catch((openError) => {
@@ -213,6 +219,11 @@ export function MCAPSheet({
           return;
         }
         setTopicError(loadError instanceof Error ? loadError.message : 'Unable to load topic');
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setProgress(null);
+        }
       });
 
     return () => {
@@ -770,6 +781,16 @@ export function MCAPSheet({
   const showGrid = !loading && !error && selectedSheet;
   const showTopicStatus = !loading && !error && selectedTopic && !selectedSheet;
 
+  const progressPercent = progress ? Math.round(progress.fraction * 100) : 0;
+  const progressNode = progress ? (
+    <div className="mcap-sheet__status">
+      {progress.phase === 'recovering' ? 'Recovering truncated file…' : 'Downloading…'} {progressPercent}%
+      <div className="mcap-sheet__progress">
+        <div className="mcap-sheet__progress-bar" style={{ width: `${progressPercent}%` }} />
+      </div>
+    </div>
+  ) : null;
+
   return (
     <section className={`mcap-sheet ${fill ? 'mcap-sheet--fill' : ''} ${className ?? ''}`.trim()}>
       <header className="mcap-sheet__toolbar">
@@ -777,6 +798,14 @@ export function MCAPSheet({
           {ranged ? (
             <span className="mcap-sheet__badge" title="Reading via HTTP range requests">
               range
+            </span>
+          ) : null}
+          {recovered ? (
+            <span
+              className="mcap-sheet__badge mcap-sheet__badge--recovered"
+              title="Recovered from a truncated or unindexed file"
+            >
+              recovered
             </span>
           ) : null}
           {selectedSheet ? (
@@ -787,7 +816,7 @@ export function MCAPSheet({
         </span>
       </header>
 
-      {loading ? <p className="mcap-sheet__status">Loading MCAP file…</p> : null}
+      {loading ? progressNode ?? <p className="mcap-sheet__status">Loading MCAP file…</p> : null}
       {error ? <p className="mcap-sheet__status mcap-sheet__status--error">{error}</p> : null}
       {!loading && !error && topics.length === 0 ? (
         <p className="mcap-sheet__status">No messages were found in this MCAP file.</p>
@@ -796,7 +825,7 @@ export function MCAPSheet({
         topicError ? (
           <p className="mcap-sheet__status mcap-sheet__status--error">{topicError}</p>
         ) : (
-          <p className="mcap-sheet__status">Loading “{selectedTopic}”…</p>
+          progressNode ?? <p className="mcap-sheet__status">Loading “{selectedTopic}”…</p>
         )
       ) : null}
 
