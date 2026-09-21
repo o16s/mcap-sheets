@@ -39,6 +39,29 @@
   letter-spacing: 0.02em;
 }
 
+.mcap-sheet__badge--recovered {
+  border-color: #fdd663;
+  background: #fef7e0;
+  color: #b06000;
+}
+
+.mcap-sheet__progress {
+  margin-top: 8px;
+  height: 6px;
+  width: 100%;
+  max-width: 320px;
+  background: #e8eaed;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.mcap-sheet__progress-bar {
+  height: 100%;
+  background: #1a73e8;
+  border-radius: 999px;
+  transition: width 0.1s linear;
+}
+
 .mcap-sheet__tab-count {
   margin-left: 6px;
   padding: 0 6px;

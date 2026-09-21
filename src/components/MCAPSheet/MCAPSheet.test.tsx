@@ -171,6 +171,22 @@ describe('MCAPSheet', () => {
     );
   });
 
+  it('shows a "recovered" badge for a recovered source', async () => {
+    const workbookOpener = async () => ({
+      topics: [{ topic: 'sensors', messageCount: 1 }],
+      ranged: false,
+      recovered: true,
+      loadTopic: async () => ({
+        topic: 'sensors',
+        columns: [LOG_TIME_COLUMN, 'v'],
+        rows: [{ [LOG_TIME_COLUMN]: '1', v: 1 }],
+      }),
+    });
+
+    render(<MCAPSheet url="mem://truncated.mcap" workbookOpener={workbookOpener} />);
+    expect(await screen.findByText('recovered')).toBeTruthy();
+  });
+
   it('sorts rows via the header context menu', async () => {
     const onSortChange = vi.fn();
     const { container } = render(

@@ -16,4 +16,6 @@ export type {
   MCAPSelection,
   CellRef,
   SortSpec,
+  LoadProgress,
+  ProgressPhase,
 } from './types';

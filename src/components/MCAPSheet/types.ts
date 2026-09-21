@@ -1,7 +1,9 @@
 import type { CellValue } from '../../lib/mcap/worksheet';
 import type { ColumnType } from '../../lib/mcap/columnTypes';
 import type {
+  LoadProgress,
   McapWorkbookSource,
+  ProgressPhase,
   TopicSummary,
   TopicWorksheet,
 } from '../../lib/mcap/mcapWorkbook';
@@ -104,6 +106,8 @@ export type {
   TopicWorksheet,
   TopicSummary,
   McapWorkbookSource,
+  LoadProgress,
+  ProgressPhase,
   CellValue,
   ColumnFilterValue,
   ColumnType,
