@@ -1,35 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { cycleSort, sortRows, type SortSpec } from './sortModel';
+import { cycleSort, sortRowIndices, type SortSpec } from './sortModel';
+import type { CellValue } from '../../lib/mcap/worksheet';
 
-type Row = { n: number | string | null; s: string | null };
+// Column-major fixture: cell arrays indexed by row.
+const n: CellValue[] = [2, 10, null];
+const s: CellValue[] = ['banana', 'apple', 'cherry'];
+const column: Record<string, CellValue[]> = { n, s };
+const indices = [0, 1, 2];
+const valueAt = (col: string) => (rowIndex: number) => column[col][rowIndex];
 
-const rows: Row[] = [
-  { n: 2, s: 'banana' },
-  { n: 10, s: 'apple' },
-  { n: null, s: 'cherry' },
-];
-
-describe('sortRows', () => {
+describe('sortRowIndices', () => {
   it('returns the input unchanged when unsorted', () => {
-    expect(sortRows(rows, null, true)).toBe(rows);
+    expect(sortRowIndices(indices, null, true, valueAt('n'))).toBe(indices);
   });
 
   it('sorts numeric columns numerically (not lexically), empties last', () => {
-    const asc = sortRows(rows, { column: 'n', direction: 'asc' }, true).map((r) => r.n);
+    const asc = sortRowIndices(indices, { column: 'n', direction: 'asc' }, true, valueAt('n')).map(
+      (i) => n[i],
+    );
     expect(asc).toEqual([2, 10, null]);
-    const desc = sortRows(rows, { column: 'n', direction: 'desc' }, true).map((r) => r.n);
+    const desc = sortRowIndices(indices, { column: 'n', direction: 'desc' }, true, valueAt('n')).map(
+      (i) => n[i],
+    );
     expect(desc).toEqual([10, 2, null]); // empties stay last even descending
   });
 
   it('sorts text columns lexically', () => {
-    const asc = sortRows(rows, { column: 's', direction: 'asc' }, false).map((r) => r.s);
+    const asc = sortRowIndices(indices, { column: 's', direction: 'asc' }, false, valueAt('s')).map(
+      (i) => s[i],
+    );
     expect(asc).toEqual(['apple', 'banana', 'cherry']);
   });
 
   it('does not mutate the input array', () => {
-    const copy = [...rows];
-    sortRows(rows, { column: 'n', direction: 'asc' }, true);
-    expect(rows).toEqual(copy);
+    const copy = [...indices];
+    sortRowIndices(indices, { column: 'n', direction: 'asc' }, true, valueAt('n'));
+    expect(indices).toEqual(copy);
   });
 });
 

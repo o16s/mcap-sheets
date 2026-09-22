@@ -8,7 +8,12 @@ import {
   type VisibilityState,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { openMcapWorkbook, type LoadProgress } from '../../lib/mcap/mcapWorkbook';
+import {
+  cellAt,
+  openMcapWorkbook,
+  worksheetFromRows,
+  type LoadProgress,
+} from '../../lib/mcap/mcapWorkbook';
 import { formatTimestamp, TIMESTAMP_COLUMNS } from '../../lib/mcap/worksheet';
 import { inferColumnType, type ColumnType } from '../../lib/mcap/columnTypes';
 import { ColumnFilter } from './ColumnFilter';
@@ -16,7 +21,7 @@ import { ColumnContextMenu, type ContextMenuItem } from './ColumnContextMenu';
 import { buildColumnPredicate } from './columnFilterModel';
 import { buildClipboardTable } from './clipboard';
 import { cellKey, fromSelection, rectangleCells, toSelection, type CellRef } from './selectionModel';
-import { cycleSort, sortRows, type SortSpec } from './sortModel';
+import { cycleSort, sortRowIndices, type SortSpec } from './sortModel';
 import { CELL_FONT, HEADER_FONT, measureTextWidth } from './textWidth';
 import type {
   CellValue,
@@ -29,7 +34,10 @@ import type {
 } from './types';
 import './MCAPSheet.css';
 
-type Row = Record<string, CellValue>;
+// The table's row datum is the row's index into the topic's UNFILTERED rows.
+// Cell values are read column-major from the worksheet, so we never materialize
+// per-row objects (critical for very wide schemas).
+type RowIndex = number;
 
 const toCellText = (value: CellValue): string => (value === null ? '' : String(value));
 
@@ -50,11 +58,17 @@ const cellDisplayText = (column: string, value: CellValue): string =>
  * content, clamped to sane bounds. Used both for double-click autosize and for
  * the initial auto-fit on load.
  */
-const computeColumnWidth = (columnId: string, rows: Row[]): number => {
+const computeColumnWidth = (
+  columnId: string,
+  sheet: TopicWorksheet,
+  sampleIndices: number[],
+): number => {
   let widest = measureTextWidth(columnId, HEADER_FONT);
-  const limit = Math.min(rows.length, AUTOSIZE_SAMPLE);
+  const cells = sheet.columnData.get(columnId);
+  const limit = Math.min(sampleIndices.length, AUTOSIZE_SAMPLE);
   for (let index = 0; index < limit; index += 1) {
-    const width = measureTextWidth(cellDisplayText(columnId, rows[index][columnId]), CELL_FONT);
+    const value = cells?.[sampleIndices[index]] ?? null;
+    const width = measureTextWidth(cellDisplayText(columnId, value), CELL_FONT);
     if (width > widest) {
       widest = width;
     }
@@ -85,7 +99,12 @@ export function MCAPSheet({
 }: MCAPSheetProps) {
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [selectedTopic, setSelectedTopic] = useState<string>('');
+  // Final (fully-decoded) sheets, keyed by topic.
   const [sheetCache, setSheetCache] = useState<Record<string, TopicWorksheet>>({});
+  // The current in-progress topic's latest partial snapshot (progressive paint).
+  const [partial, setPartial] = useState<{ topic: string; sheet: TopicWorksheet } | null>(null);
+  // The topic currently mid-stream (null once its final sheet lands).
+  const [streamingTopic, setStreamingTopic] = useState<string | null>(null);
   const [ranged, setRanged] = useState(false);
   const [recovered, setRecovered] = useState(false);
   const [progress, setProgress] = useState<LoadProgress | null>(null);
@@ -103,6 +122,11 @@ export function MCAPSheet({
 
   const draggedColumnRef = useRef<string | null>(null);
   const sourceRef = useRef<McapWorkbookSource | null>(null);
+  // Topics whose load has been kicked off (so partial updates don't restart it).
+  const loadStartedRef = useRef<Set<string>>(new Set());
+  // `${topic}:${columnCount}` last auto-sized — so we size once per topic (and
+  // again only if the column set grows mid-stream), not on every partial.
+  const sizedKeyRef = useRef<string>('');
   const scrollRef = useRef<HTMLDivElement>(null);
   // Selection interaction refs (read by document-level drag handlers).
   const anchorRef = useRef<CellRef | null>(null);
@@ -133,14 +157,15 @@ export function MCAPSheet({
     const loader = dataLoaderRef.current;
     if (loader) {
       const worksheets = await loader(target);
-      const byTopic = new Map(worksheets.map((sheet) => [sheet.topic, sheet]));
+      const byTopic = new Map(worksheets.map((sheet) => [sheet.topic, worksheetFromRows(sheet)]));
       return {
         topics: worksheets.map((sheet) => ({
           topic: sheet.topic,
           messageCount: sheet.rows.length,
         })),
         ranged: false,
-        loadTopic: async (topic) => byTopic.get(topic) ?? { topic, columns: [], rows: [] },
+        loadTopic: async (topic) =>
+          byTopic.get(topic) ?? { topic, columns: [], rowCount: 0, columnData: new Map() },
       };
     }
 
@@ -163,8 +188,12 @@ export function MCAPSheet({
     setProgress(null);
     setRecovered(false);
     sourceRef.current = null;
+    loadStartedRef.current = new Set();
+    sizedKeyRef.current = '';
     setTopics([]);
     setSheetCache({});
+    setPartial(null);
+    setStreamingTopic(null);
     setSelectedTopic('');
 
     openSource(url)
@@ -196,32 +225,48 @@ export function MCAPSheet({
     };
   }, [url, openSource]);
 
-  // Lazily load the selected topic's rows on demand, caching the result.
+  // Lazily load the selected topic on demand. The streaming source emits partial
+  // snapshots as rows decode, so the grid paints the first rows almost
+  // immediately and grows live; the promise resolves with the final sheet.
+  // Keyed on `selectedTopic` only (partials must not restart the load), guarded
+  // by a ref so a topic loads at most once.
   useEffect(() => {
     const source = sourceRef.current;
-    if (!source || !selectedTopic || sheetCache[selectedTopic]) {
+    if (!source || !selectedTopic) {
       return;
     }
+    if (sheetCache[selectedTopic] || loadStartedRef.current.has(selectedTopic)) {
+      return;
+    }
+    loadStartedRef.current.add(selectedTopic);
 
     let cancelled = false;
     setTopicError(null);
+    setStreamingTopic(selectedTopic);
 
     source
-      .loadTopic(selectedTopic)
+      .loadTopic(selectedTopic, (snapshot) => {
+        if (!cancelled) {
+          setPartial({ topic: selectedTopic, sheet: snapshot });
+        }
+      })
       .then((sheet) => {
         if (cancelled) {
           return;
         }
         setSheetCache((current) => ({ ...current, [selectedTopic]: sheet }));
+        setPartial((current) => (current?.topic === selectedTopic ? null : current));
       })
       .catch((loadError) => {
         if (cancelled) {
           return;
         }
+        loadStartedRef.current.delete(selectedTopic); // allow a retry
         setTopicError(loadError instanceof Error ? loadError.message : 'Unable to load topic');
       })
       .finally(() => {
         if (!cancelled) {
+          setStreamingTopic((current) => (current === selectedTopic ? null : current));
           setProgress(null);
         }
       });
@@ -229,20 +274,25 @@ export function MCAPSheet({
     return () => {
       cancelled = true;
     };
-  }, [selectedTopic, sheetCache]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTopic]);
 
-  const selectedSheet = sheetCache[selectedTopic];
+  // The sheet to display: the final one if loaded, else the latest partial.
+  const selectedSheet =
+    sheetCache[selectedTopic] ??
+    (partial?.topic === selectedTopic ? partial.sheet : undefined);
+  // Whether the displayed sheet is fully decoded (gates filter/sort/type work).
+  const ready = Boolean(sheetCache[selectedTopic]);
+  // Whether we're still streaming rows into the current topic.
+  const streaming = streamingTopic === selectedTopic && !ready;
 
-  // Stable identity: index into the UNFILTERED rows. Relies on filtering never
-  // cloning row objects (see `filteredRows` below) — `row.original` is the same
-  // object reference held here, so `row.id` is the original index.
-  const rowIndexByRef = useMemo(() => {
-    const map = new Map<Row, number>();
-    if (selectedSheet) {
-      selectedSheet.rows.forEach((row, index) => map.set(row, index));
-    }
-    return map;
-  }, [selectedSheet]);
+  // Every unfiltered row index [0, rowCount). This is the base the table's data
+  // (a filtered/sorted permutation of indices) is derived from; a row's identity
+  // is simply its index.
+  const allIndices = useMemo(
+    () => (selectedSheet ? Array.from({ length: selectedSheet.rowCount }, (_, i) => i) : []),
+    [selectedSheet],
+  );
 
   // --- Controlled/uncontrolled filters ---
   const effectiveFilters = filters ?? filtersInternal;
@@ -300,76 +350,98 @@ export function MCAPSheet({
 
   const columnTypes = useMemo(() => {
     const types: Record<string, ColumnType> = {};
-    if (!selectedSheet) {
+    // Defer type inference (enum/number detection scans every row) until the
+    // topic is fully loaded — during streaming we just paint rows.
+    if (!selectedSheet || !ready) {
       return types;
     }
 
     for (const column of selectedSheet.columns) {
+      const cells = selectedSheet.columnData.get(column) ?? [];
       types[column] = inferColumnType(
         (function* iterate() {
-          for (const row of selectedSheet.rows) {
-            yield row[column];
+          for (let index = 0; index < selectedSheet.rowCount; index += 1) {
+            yield cells[index] ?? null;
           }
         })(),
       );
     }
 
     return types;
-  }, [selectedSheet]);
+  }, [selectedSheet, ready]);
 
-  const filteredRows = useMemo(() => {
+  const filteredIndices = useMemo(() => {
     if (!selectedSheet) {
       return [];
     }
+    // While streaming, show every row in natural order (no filtering) so paint
+    // stays cheap and immediate; filters apply once fully loaded.
+    if (!ready) {
+      return allIndices;
+    }
 
+    // Hoist each active column's cell array so the hot filter loop indexes an
+    // array directly instead of going through a Map per cell.
     const predicates = selectedSheet.columns
       .map((column) => ({
-        column,
+        cells: selectedSheet.columnData.get(column),
         predicate: buildColumnPredicate(effectiveFilters[column], columnTypes[column]),
       }))
-      .filter((entry): entry is { column: string; predicate: (value: CellValue) => boolean } =>
-        entry.predicate !== null,
+      .filter(
+        (entry): entry is { cells: CellValue[] | undefined; predicate: (value: CellValue) => boolean } =>
+          entry.predicate !== null,
       );
 
     if (predicates.length === 0) {
-      return selectedSheet.rows;
+      return allIndices;
     }
 
-    return selectedSheet.rows.filter((row) =>
-      predicates.every(({ column, predicate }) => predicate(row[column])),
+    return allIndices.filter((rowIndex) =>
+      predicates.every(({ cells, predicate }) => predicate(cells?.[rowIndex] ?? null)),
     );
-  }, [effectiveFilters, columnTypes, selectedSheet]);
+  }, [effectiveFilters, columnTypes, selectedSheet, allIndices, ready]);
 
-  const sortedRows = useMemo(() => {
-    if (!effectiveSort) {
-      return filteredRows;
+  const sortedIndices = useMemo(() => {
+    // No sorting while streaming (re-sorting a growing set each snapshot would
+    // stutter); apply once fully loaded.
+    if (!ready || !effectiveSort || !selectedSheet) {
+      return filteredIndices;
     }
     const numeric =
       columnTypes[effectiveSort.column]?.kind === 'number' ||
       TIMESTAMP_COLUMNS.includes(effectiveSort.column);
-    return sortRows(filteredRows, effectiveSort, numeric);
-  }, [filteredRows, effectiveSort, columnTypes]);
+    const cells = selectedSheet.columnData.get(effectiveSort.column);
+    return sortRowIndices(
+      filteredIndices,
+      effectiveSort,
+      numeric,
+      (rowIndex) => cells?.[rowIndex] ?? null,
+    );
+  }, [filteredIndices, effectiveSort, columnTypes, selectedSheet, ready]);
 
-  const columns = useMemo<ColumnDef<Row>[]>(() => {
+  const columns = useMemo<ColumnDef<RowIndex>[]>(() => {
     if (!selectedSheet) {
       return [];
     }
 
-    return selectedSheet.columns.map((column) => ({
-      id: column,
-      accessorFn: (row) => row[column],
-    }));
+    return selectedSheet.columns.map((column) => {
+      const cells = selectedSheet.columnData.get(column);
+      return {
+        id: column,
+        accessorFn: (rowIndex) => cells?.[rowIndex] ?? null,
+      };
+    });
   }, [selectedSheet]);
 
   const table = useReactTable({
-    data: sortedRows,
+    data: sortedIndices,
     columns,
     state: { columnOrder, columnVisibility, columnSizing },
     onColumnOrderChange: setColumnOrder,
     onColumnVisibilityChange: setColumnVisibility,
     onColumnSizingChange: setColumnSizing,
     columnResizeMode: 'onChange',
-    getRowId: (row) => String(rowIndexByRef.get(row) ?? -1),
+    getRowId: (rowIndex) => String(rowIndex),
     getCoreRowModel: getCoreRowModel(),
     defaultColumn: { minSize: MIN_COLUMN_WIDTH, size: 150 },
   });
@@ -406,7 +478,7 @@ export function MCAPSheet({
       return { rowHi, colHi, cellHi };
     }
 
-    const rowCount = selectedSheet.rows.length;
+    const rowCount = selectedSheet.rowCount;
     const columnSet = new Set(selectedSheet.columns);
     const inRange = (rowIndex: number) => rowIndex >= 0 && rowIndex < rowCount;
 
@@ -423,30 +495,47 @@ export function MCAPSheet({
     return { rowHi, colHi, cellHi };
   }, [highlights, selectedSheet, selectedTopic]);
 
-  // Reset view state (order/visibility/sizing) and auto-fit whenever the active
-  // sheet changes. Filters reset only when uncontrolled (never clobber a
-  // controlled embedder's filters).
+  // On topic switch, reset view state (order/visibility/sizing). Filters/sort
+  // reset only when uncontrolled (never clobber a controlled embedder's state).
+  // Keyed on `selectedTopic` so progressive partials don't wipe the user's view.
   useEffect(() => {
-    setColumnOrder(selectedSheet ? [...selectedSheet.columns] : []);
+    setColumnOrder([]);
     setColumnVisibility({});
+    setColumnSizing({});
+    sizedKeyRef.current = '';
     if (!filtersControlledRef.current) {
       setFiltersInternal({});
     }
     if (!sortControlledRef.current) {
       setSortInternal(null);
     }
+  }, [selectedTopic]);
 
+  // Establish column order + auto-fit widths once the columns are first known
+  // (from the first partial), and again only if the column set grows mid-stream.
+  // Runs at most once per (topic, columnCount) so partials don't re-fit on every
+  // batch or fight the user's manual resizing.
+  useEffect(() => {
     if (!selectedSheet) {
-      setColumnSizing({});
       return;
     }
+    const key = `${selectedTopic}:${selectedSheet.columns.length}`;
+    if (sizedKeyRef.current === key) {
+      return;
+    }
+    sizedKeyRef.current = key;
 
+    setColumnOrder([...selectedSheet.columns]);
     const sizing: ColumnSizingState = {};
+    const sampleIndices = Array.from(
+      { length: Math.min(selectedSheet.rowCount, AUTOSIZE_SAMPLE) },
+      (_, i) => i,
+    );
     for (const column of selectedSheet.columns) {
-      sizing[column] = computeColumnWidth(column, selectedSheet.rows);
+      sizing[column] = computeColumnWidth(column, selectedSheet, sampleIndices);
     }
     setColumnSizing(sizing);
-  }, [selectedSheet]);
+  }, [selectedSheet, selectedTopic]);
 
   // On topic change: clear selection (+ notify) and report the new topic. Keyed
   // on `selectedTopic` only (fires on tab click, before rows load); callbacks
@@ -481,13 +570,22 @@ export function MCAPSheet({
     workbookOpenerRef.current = workbookOpener;
   });
 
-  // Report the current topic's rows to the embedder once available, so it can
-  // map row values (e.g. a timestamp column) to a rowIndex.
+  // Report a columnar view of the current topic to the embedder once available,
+  // so it can map cell values (e.g. a timestamp column) to a rowIndex without us
+  // materializing per-row objects.
   useEffect(() => {
-    if (selectedSheet) {
-      onRowsLoadedRef.current?.(selectedTopic, selectedSheet.rows);
+    // Only report the FINAL, fully-loaded sheet — a partial would give the
+    // embedder incomplete row indices.
+    if (ready && selectedSheet) {
+      onRowsLoadedRef.current?.(selectedTopic, {
+        topic: selectedTopic,
+        rowCount: selectedSheet.rowCount,
+        columns: selectedSheet.columns,
+        cell: (rowIndex, column) => cellAt(selectedSheet, rowIndex, column),
+        column: (name) => selectedSheet.columnData.get(name),
+      });
     }
-  }, [selectedSheet, selectedTopic]);
+  }, [selectedSheet, selectedTopic, ready]);
 
   // Scroll a requested (unfiltered) row into view, when it is in the current
   // display order (i.e. not filtered out).
@@ -632,7 +730,7 @@ export function MCAPSheet({
       effectiveSelectionSet,
       rowDisplayOrder,
       visibleColumns,
-      (rowIndex, column) => cellDisplayText(column, selectedSheet.rows[rowIndex][column]),
+      (rowIndex, column) => cellDisplayText(column, cellAt(selectedSheet, rowIndex, column)),
     );
     if (!table) {
       return;
@@ -644,12 +742,15 @@ export function MCAPSheet({
 
   const autoSizeColumn = useCallback(
     (columnId: string) => {
+      if (!selectedSheet) {
+        return;
+      }
       setColumnSizing((current) => ({
         ...current,
-        [columnId]: computeColumnWidth(columnId, filteredRows),
+        [columnId]: computeColumnWidth(columnId, selectedSheet, filteredIndices),
       }));
     },
-    [filteredRows],
+    [selectedSheet, filteredIndices],
   );
 
   const reorderColumn = useCallback(
@@ -717,27 +818,30 @@ export function MCAPSheet({
     const visibleCount = leafColumns.length - hidden.length;
     const sortedByThis = effectiveSort?.column === menu.columnId;
 
-    const items: ContextMenuItem[] = [
-      {
-        label: 'Sort ascending',
-        onSelect: () => commitSort({ column: menu.columnId, direction: 'asc' }),
-      },
-      {
-        label: 'Sort descending',
-        onSelect: () => commitSort({ column: menu.columnId, direction: 'desc' }),
-      },
-      {
-        label: 'Clear sort',
-        disabled: !sortedByThis,
-        onSelect: () => commitSort(null),
-      },
-      {
-        label: `Hide "${menu.columnId}"`,
-        disabled: visibleCount <= 1,
-        onSelect: () =>
-          setColumnVisibility((current) => ({ ...current, [menu.columnId]: false })),
-      },
-    ];
+    // Sorting is deferred until the topic is fully loaded — omit sort items while
+    // streaming (they'd be inert and misleading).
+    const items: ContextMenuItem[] = ready
+      ? [
+          {
+            label: 'Sort ascending',
+            onSelect: () => commitSort({ column: menu.columnId, direction: 'asc' }),
+          },
+          {
+            label: 'Sort descending',
+            onSelect: () => commitSort({ column: menu.columnId, direction: 'desc' }),
+          },
+          {
+            label: 'Clear sort',
+            disabled: !sortedByThis,
+            onSelect: () => commitSort(null),
+          },
+        ]
+      : [];
+    items.push({
+      label: `Hide "${menu.columnId}"`,
+      disabled: visibleCount <= 1,
+      onSelect: () => setColumnVisibility((current) => ({ ...current, [menu.columnId]: false })),
+    });
 
     for (const column of hidden) {
       items.push({
@@ -766,6 +870,7 @@ export function MCAPSheet({
     menu,
     table,
     selectable,
+    ready,
     rows,
     visibleColumns,
     effectiveSelectionSet,
@@ -809,9 +914,17 @@ export function MCAPSheet({
             </span>
           ) : null}
           {selectedSheet ? (
-            <span>
-              {filteredRows.length} / {selectedSheet.rows.length} rows
-            </span>
+            streaming ? (
+              <span className="mcap-sheet__streaming">
+                <span className="mcap-sheet__spinner" aria-hidden />
+                loading… {selectedSheet.rowCount.toLocaleString()} rows
+                {progress ? ` (${Math.round(progress.fraction * 100)}%)` : ''}
+              </span>
+            ) : (
+              <span>
+                {filteredIndices.length.toLocaleString()} / {selectedSheet.rowCount.toLocaleString()} rows
+              </span>
+            )
           ) : null}
         </span>
       </header>
@@ -878,22 +991,24 @@ export function MCAPSheet({
                       >
                         {columnId}
                       </span>
-                      <button
-                        type="button"
-                        className={`mcap-grid__sort ${effectiveSort?.column === columnId ? 'is-active' : ''}`.trim()}
-                        aria-label={`Sort ${columnId}`}
-                        title="Sort"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          commitSort(cycleSort(effectiveSort, columnId));
-                        }}
-                      >
-                        {effectiveSort?.column === columnId
-                          ? effectiveSort.direction === 'asc'
-                            ? '▲'
-                            : '▼'
-                          : '⇅'}
-                      </button>
+                      {ready ? (
+                        <button
+                          type="button"
+                          className={`mcap-grid__sort ${effectiveSort?.column === columnId ? 'is-active' : ''}`.trim()}
+                          aria-label={`Sort ${columnId}`}
+                          title="Sort"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            commitSort(cycleSort(effectiveSort, columnId));
+                          }}
+                        >
+                          {effectiveSort?.column === columnId
+                            ? effectiveSort.direction === 'asc'
+                              ? '▲'
+                              : '▼'
+                            : '⇅'}
+                        </button>
+                      ) : null}
                       <div
                         className={`mcap-grid__resizer ${header.column.getIsResizing() ? 'is-resizing' : ''}`.trim()}
                         onMouseDown={header.getResizeHandler()}
@@ -905,6 +1020,7 @@ export function MCAPSheet({
                   );
                 })}
               </div>
+              {ready ? (
               <div className="mcap-grid__filter-row" role="row">
                 {headers.map((header) => {
                   const columnId = header.column.id;
@@ -924,6 +1040,7 @@ export function MCAPSheet({
                   );
                 })}
               </div>
+              ) : null}
             </div>
 
             <div className="mcap-grid__tbody" style={{ height: rowVirtualizer.getTotalSize() }}>
@@ -939,7 +1056,7 @@ export function MCAPSheet({
                   >
                     {row.getVisibleCells().map((cell) => {
                       const columnId = cell.column.id;
-                      const value = row.original[columnId];
+                      const value = cell.getValue<CellValue>();
                       const isTimestamp = TIMESTAMP_COLUMNS.includes(columnId);
                       const raw = toCellText(value);
                       const text = isTimestamp ? formatTimestamp(value) : raw;

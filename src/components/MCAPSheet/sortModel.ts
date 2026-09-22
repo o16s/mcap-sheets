@@ -9,26 +9,27 @@ export interface SortSpec {
 }
 
 /**
- * Returns a new array of rows sorted by `sort` (or the input unchanged when
- * `sort` is null). Numeric/timestamp columns are compared numerically, others
- * lexically; empty cells (null/undefined) always sort last regardless of
- * direction — matching spreadsheet behavior.
+ * Returns a new array of row indices sorted by `sort` (or the input unchanged
+ * when `sort` is null). `valueAt` reads a row's cell in the sort column.
+ * Numeric/timestamp columns are compared numerically, others lexically; empty
+ * cells (null/undefined) always sort last regardless of direction — matching
+ * spreadsheet behavior.
  */
-export const sortRows = <T extends Record<string, CellValue>>(
-  rows: T[],
+export const sortRowIndices = (
+  indices: number[],
   sort: SortSpec | null,
   numeric: boolean,
-): T[] => {
+  valueAt: (rowIndex: number) => CellValue,
+): number[] => {
   if (!sort) {
-    return rows;
+    return indices;
   }
 
-  const { column, direction } = sort;
-  const dir = direction === 'asc' ? 1 : -1;
+  const dir = sort.direction === 'asc' ? 1 : -1;
 
-  return [...rows].sort((a, b) => {
-    const av = a[column];
-    const bv = b[column];
+  return [...indices].sort((a, b) => {
+    const av = valueAt(a);
+    const bv = valueAt(b);
     const aEmpty = av === null || av === undefined;
     const bEmpty = bv === null || bv === undefined;
     if (aEmpty && bEmpty) return 0;

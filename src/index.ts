@@ -1,7 +1,15 @@
-export { MCAPSheet, openMcapWorkbook, openMcapWorkbookFromBlob } from './components/MCAPSheet';
+export {
+  MCAPSheet,
+  openMcapWorkbook,
+  openMcapWorkbookFromBlob,
+  cellAt,
+  worksheetFromRows,
+} from './components/MCAPSheet';
 export type {
   MCAPSheetProps,
   TopicWorksheet,
+  TopicRows,
+  TopicRowsView,
   TopicSummary,
   McapWorkbookSource,
   CellValue,

@@ -4,6 +4,8 @@ import type {
   LoadProgress,
   McapWorkbookSource,
   ProgressPhase,
+  TopicRows,
+  TopicRowsView,
   TopicSummary,
   TopicWorksheet,
 } from '../../lib/mcap/mcapWorkbook';
@@ -57,10 +59,10 @@ export interface MCAPSheetProps {
   fill?: boolean;
   rowHeight?: number;
   /**
-   * Eager override (used by tests/stories): returns all topic worksheets at
-   * once. When provided, the component wraps the result in a lazy source.
+   * Eager override (used by tests/stories): returns all topics' rows at once.
+   * When provided, the component wraps the result in a lazy columnar source.
    */
-  dataLoader?: (url: string) => Promise<TopicWorksheet[]>;
+  dataLoader?: (url: string) => Promise<TopicRows[]>;
   /**
    * Lazy override: opens a workbook whose topics are known up front and whose
    * rows load on demand. Defaults to `openMcapWorkbook`.
@@ -90,11 +92,12 @@ export interface MCAPSheetProps {
   /** Fires whenever the sort changes. */
   onSortChange?: (sort: SortSpec | null) => void;
   /**
-   * Fires with the current topic's rows whenever they become available (on a
-   * topic switch or reload). Lets an embedder map row values (e.g. a timestamp
-   * column) to `rowIndex` for `highlights`/`scrollToRowIndex`.
+   * Fires with a columnar view of the current topic whenever its rows become
+   * available (on a topic switch or reload). Lets an embedder map cell values
+   * (e.g. a timestamp column) to `rowIndex` for `highlights`/`scrollToRowIndex`
+   * without the component materializing per-row objects. See {@link TopicRowsView}.
    */
-  onRowsLoaded?: (topic: string, rows: readonly Record<string, CellValue>[]) => void;
+  onRowsLoaded?: (topic: string, view: TopicRowsView) => void;
   /**
    * Scroll a row into view by its index into the topic's UNFILTERED rows.
    * Ignored when that row is filtered out of the current view.
@@ -104,6 +107,8 @@ export interface MCAPSheetProps {
 
 export type {
   TopicWorksheet,
+  TopicRows,
+  TopicRowsView,
   TopicSummary,
   McapWorkbookSource,
   LoadProgress,

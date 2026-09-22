@@ -8,10 +8,10 @@ import type {
   MCAPHighlights,
   MCAPSelection,
   SortSpec,
-  TopicWorksheet,
+  TopicRows,
 } from './types';
 
-const sampleWorkbook: TopicWorksheet[] = [
+const sampleWorkbook: TopicRows[] = [
   {
     topic: '/imu',
     columns: [LOG_TIME_COLUMN, 'header.frame_id', 'linear_acceleration.x', 'linear_acceleration.y'],
