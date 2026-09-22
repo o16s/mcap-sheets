@@ -45,6 +45,29 @@
   color: #b06000;
 }
 
+.mcap-sheet__streaming {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #1a73e8;
+  font-variant-numeric: tabular-nums;
+}
+
+.mcap-sheet__spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid #a8c7fa;
+  border-top-color: #1a73e8;
+  border-radius: 50%;
+  animation: mcap-spin 0.7s linear infinite;
+}
+
+@keyframes mcap-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .mcap-sheet__progress {
   margin-top: 8px;
   height: 6px;

@@ -95,20 +95,27 @@ export const flattenJsonPayload = (
   return output;
 };
 
+/**
+ * Column-major accumulator: instead of one object per row (which, for very wide
+ * schemas, becomes 100k+ dictionary-mode objects and gigabytes of heap), each
+ * column's cells are collected into their own array, indexed by row. A cell that
+ * a given row omits is left as a hole (read back as null). `columns` tracks the
+ * union of column names seen; `rowCount` is the number of rows appended.
+ */
 export interface TopicAccumulator {
   columns: Set<string>;
-  rows: Array<Record<string, CellValue>>;
+  columnData: Map<string, CellValue[]>;
+  rowCount: number;
 }
 
-export const normalizeTopicAccumulator = (accumulator: TopicAccumulator) => {
-  // Timestamp columns lead (log_time, then publish_time); everything else is
-  // sorted alphabetically after them.
+/** Sort columns with the timestamp columns leading, then alphabetically. */
+export const orderColumns = (columns: Iterable<string>): string[] => {
   const leadRank = (column: string): number => {
     const index = TIMESTAMP_COLUMNS.indexOf(column);
     return index === -1 ? TIMESTAMP_COLUMNS.length : index;
   };
 
-  const columns = Array.from(accumulator.columns).sort((left, right) => {
+  return Array.from(columns).sort((left, right) => {
     const rankDelta = leadRank(left) - leadRank(right);
     if (rankDelta !== 0) {
       return rankDelta;
@@ -116,15 +123,14 @@ export const normalizeTopicAccumulator = (accumulator: TopicAccumulator) => {
 
     return left.localeCompare(right);
   });
-
-  const rows = accumulator.rows.map((row) => {
-    const normalized: Record<string, CellValue> = {};
-    columns.forEach((column) => {
-      normalized[column] = row[column] ?? null;
-    });
-
-    return normalized;
-  });
-
-  return { columns, rows };
 };
+
+/**
+ * Finalizes an accumulator into ordered columns + their column-major data. Does
+ * NOT materialize row objects — the per-column arrays are carried through as-is.
+ */
+export const normalizeTopicAccumulator = (accumulator: TopicAccumulator) => ({
+  columns: orderColumns(accumulator.columns),
+  columnData: accumulator.columnData,
+  rowCount: accumulator.rowCount,
+});

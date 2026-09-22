@@ -4,8 +4,9 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MCAPSheet } from './MCAPSheet';
 import { LOG_TIME_COLUMN } from '../../lib/mcap/worksheet';
+import { worksheetFromRows } from '../../lib/mcap/mcapWorkbook';
 import type { MCAPSelection } from './types';
-import type { TopicWorksheet } from './types';
+import type { TopicRows } from './types';
 
 // jsdom has no layout engine, so give TanStack Virtual a viewport + ResizeObserver
 // so it actually renders the (few) data rows and their cells.
@@ -28,7 +29,7 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 });
 });
 
-const workbook: TopicWorksheet[] = [
+const workbook: TopicRows[] = [
   {
     topic: 'sensors',
     columns: [LOG_TIME_COLUMN, 'level', 'value'],
@@ -176,11 +177,12 @@ describe('MCAPSheet', () => {
       topics: [{ topic: 'sensors', messageCount: 1 }],
       ranged: false,
       recovered: true,
-      loadTopic: async () => ({
-        topic: 'sensors',
-        columns: [LOG_TIME_COLUMN, 'v'],
-        rows: [{ [LOG_TIME_COLUMN]: '1', v: 1 }],
-      }),
+      loadTopic: async () =>
+        worksheetFromRows({
+          topic: 'sensors',
+          columns: [LOG_TIME_COLUMN, 'v'],
+          rows: [{ [LOG_TIME_COLUMN]: '1', v: 1 }],
+        }),
     });
 
     render(<MCAPSheet url="mem://truncated.mcap" workbookOpener={workbookOpener} />);

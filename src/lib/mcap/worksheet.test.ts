@@ -5,6 +5,7 @@ import {
   LOG_TIME_COLUMN,
   normalizeTopicAccumulator,
   PUBLISH_TIME_COLUMN,
+  type CellValue,
   type TopicAccumulator,
 } from './worksheet';
 
@@ -38,16 +39,23 @@ describe('flattenJsonPayload', () => {
 });
 
 describe('normalizeTopicAccumulator', () => {
-  it('orders timestamp columns first and null-fills missing columns', () => {
+  it('orders timestamp columns first, carrying column-major data through', () => {
+    const columnData = new Map<string, CellValue[]>([
+      [LOG_TIME_COLUMN, ['1']],
+      ['a', ['x']],
+    ]);
     const accumulator: TopicAccumulator = {
       columns: new Set(['b', PUBLISH_TIME_COLUMN, 'a', LOG_TIME_COLUMN]),
-      rows: [{ [LOG_TIME_COLUMN]: '1', a: 'x' }],
+      columnData,
+      rowCount: 1,
     };
 
-    expect(normalizeTopicAccumulator(accumulator)).toEqual({
-      columns: [LOG_TIME_COLUMN, PUBLISH_TIME_COLUMN, 'a', 'b'],
-      rows: [{ [LOG_TIME_COLUMN]: '1', [PUBLISH_TIME_COLUMN]: null, a: 'x', b: null }],
-    });
+    const result = normalizeTopicAccumulator(accumulator);
+    // Timestamp columns lead, then the rest alphabetically.
+    expect(result.columns).toEqual([LOG_TIME_COLUMN, PUBLISH_TIME_COLUMN, 'a', 'b']);
+    expect(result.rowCount).toBe(1);
+    // Data is carried through as-is (no row objects materialized, no null-fill).
+    expect(result.columnData).toBe(columnData);
   });
 });
 
